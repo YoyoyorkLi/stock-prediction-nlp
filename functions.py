@@ -56,6 +56,7 @@ def add_technical_features (df, window):
     df[f'ema_{window}'] = df['close'].ewm(span = window, adjust = False).mean()
 
     # Volume spike ratio: volume vs rolling average
+    df[f'volume_avg_{window}'] = df['volume'].rolling(window).mean()
     df['volume_spike'] = df['volume'] / (df[f'volume_avg_{window}'] + 1e-10) #avoid division by 0
 
     # Daily volume change
