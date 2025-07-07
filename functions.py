@@ -4,7 +4,7 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from datetime import datetime, timedelta
-API_KEY = "YOUR_API_KEY"        # Set up your personal Aplaca key before running the script
+API_KEY = "YOUR_API_KEY"  # Set up personal Alpaca API key before running the script
 SECRET_KEY = "YOUR_SECRET_KEY"
 BASE_URL = "https://paper-api.alpaca.markets"
 
@@ -49,7 +49,7 @@ def add_technical_features (df, window):
     df['macd'] = ema_12 - ema_26
     df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
 
-    # Simple moving average (SMA)
+    # Simple moving average(SMA)
     df[f'sma_{window}'] = df['close'].rolling(window).mean()
 
     # Exponential Moving Average (EMA)
@@ -139,11 +139,9 @@ def add_lagged_features (df):
 
 def get_data(tickers, days):
     # Authenticate
-    
     client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
 
     # Set up timeframe
-    
     request_days = days*2
     training_days = days + 15
     end_date = datetime.now() - timedelta(days=1)  # Make end date yesterday to predict today
@@ -196,10 +194,8 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
 def predict_stocks_random_forest(data, days):
     stock_predictions = {}  # Set up data dictionary
-    
     # Loop through and predict each stock
     for key, df in data.items():
-        
         # Exclude irrelevant features
         features = [col for col in data[key].columns if col not in ['symbol', 'timestamp', 'target']]
 
