@@ -49,7 +49,7 @@ def add_technical_features (df, window):
     df['macd'] = ema_12 - ema_26
     df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
 
-    # Simple moving average(SMA)
+    # Simple moving average (SMA)
     df[f'sma_{window}'] = df['close'].rolling(window).mean()
 
     # Exponential Moving Average (EMA)
