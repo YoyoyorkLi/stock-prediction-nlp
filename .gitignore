@@ -1,2 +1,8 @@
 # OS
 .DS_Store
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# .db files
+*.db
