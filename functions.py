@@ -4,181 +4,273 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from datetime import datetime, timedelta
+
 API_KEY = "YOUR_API_KEY"  # Set up personal Alpaca API key before running the script
 SECRET_KEY = "YOUR_SECRET_KEY"
 BASE_URL = "https://paper-api.alpaca.markets"
-
-def add_technical_features (df, window):
-
-    # Log daily price change
-    df['log_return'] = np.nan
-    valid_mask = (df['close'] > 0) & (df['close'].shift(1) > 0)
-    df.loc[valid_mask, 'log_return'] = np.log(df['close'] / df['close'].shift(1))
-
-    # Intraday move percentage
-    df['pct_move_intraday'] = (df['close'] - df['open']) / df['open']
-
-    # Daily average true range(ATR)
-    df['prev_close'] = df['close'].shift(1)
-    df['tr'] = df[['high', 'low', 'prev_close']].apply(
-        lambda row: max(
-            row['high'] - row['low'],
-            abs (row['high'] - row['prev_close']),
-            abs (row['low'] - row['prev_close']),
-        ), axis = 1
-    )
-    df['atr'] = df['tr'].rolling(window).mean()
-
-    df.drop(columns = ['prev_close', 'tr'], inplace = True) # Delete columns used for calculation
-
-    # Volatility: Rolling std dev of close price
-    df[f'volatility_{window}'] = df['close'].rolling(window).std()
-
-    # Relative Strength index(RSI)
-    delta = df['close'].diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.rolling(window).mean()
-    avg_loss = loss.rolling(window).mean()
-    rs = avg_gain / (avg_loss + 1e-10)  # avoid division by zero
-    df['rsi'] = 100 - (100 / (1 + rs))
-
-    # MACD line and signal line
-    ema_12 = df['close'].ewm(span=12, adjust=False).mean()
-    ema_26 = df['close'].ewm(span=26, adjust=False).mean()
-    df['macd'] = ema_12 - ema_26
-    df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
-
-    # Simple moving average (SMA)
-    df[f'sma_{window}'] = df['close'].rolling(window).mean()
-
-    # Exponential Moving Average (EMA)
-    df[f'ema_{window}'] = df['close'].ewm(span = window, adjust = False).mean()
-
-    # Volume spike ratio: volume vs rolling average
-    df[f'volume_avg_{window}'] = df['volume'].rolling(window).mean()
-    df['volume_spike'] = df['volume'] / (df[f'volume_avg_{window}'] + 1e-10) #avoid division by 0
-
-    # Daily volume change
-    df['volume_change_pct'] = df['volume'].pct_change()
-
-    # VWAP deviation from close
-    df['vwap_deviation'] = df['close'] - df['vwap']
-
-    # Target column(percentage change from previous day)
-    df['target'] = df['close'].pct_change()
-
-    # Drop N/A and useless columns
-    df.drop(columns = ['trade_count', 'symbol', 'timestamp'], inplace = True)
-    df.dropna(inplace=True)
-    df.reset_index(drop=True, inplace=True)
-
-def add_lagged_features (df):
-        # Lagged raw features
-        for col in ['close', 'open', 'volume', 'vwap']:
-            for lag in range(1, 4):
-                df[f'{col}_lag{lag}'] = df[col].shift(lag)
-
-        # Returns and gaps
-        df['return_1d'] = df['close'].pct_change(1).shift(1)
-        df['return_5d'] = df['close'].pct_change(5).shift(1)
-        df['gap'] = df['open'] - df['close'].shift(1)
-        df['gap_pct'] = df['gap'] / df['close'].shift(1)
-
-        # Rolling statistics
-        df['sma_5'] = df['close'].rolling(window=5).mean().shift(1)
-        df['sma_10'] = df['close'].rolling(window=10).mean().shift(1)
-        df['std_5'] = df['close'].rolling(window=5).std().shift(1)
-        df['std_10'] = df['close'].rolling(window=10).std().shift(1)
-        df['ema_12'] = df['close'].ewm(span=12, adjust=False).mean().shift(1)
-        df['ema_26'] = df['close'].ewm(span=26, adjust=False).mean().shift(1)
-
-        # Price ratios
-        df['price_vs_sma5'] = df['close'] / df['sma_5']
-        df['price_vs_sma10'] = df['close'] / df['sma_10']
-        df['price_vs_vwap'] = df['close'] / df['vwap'].shift(1)
-
-        # Volume features
-        df['volume_avg_10'] = df['volume'].rolling(window=10).mean().shift(1)
-        df['volume_spike'] = df['volume'] / df['volume_avg_10']
-        df['volume_change_pct'] = df['volume'].pct_change(1).shift(1)
-
-        # Volatility and range
-        df['range'] = df['high'] - df['low']
-        df['range_lag1'] = df['range'].shift(1)
-
-        # MACD and signal
-        ema_12_raw = df['close'].ewm(span=12, adjust=False).mean()
-        ema_26_raw = df['close'].ewm(span=26, adjust=False).mean()
-        macd_raw = ema_12_raw - ema_26_raw
-        df['MACD'] = macd_raw
-        df['MACD_signal'] = macd_raw.ewm(span=9, adjust=False).mean().shift(1)
-
-        # RSI 14
-        delta = df['close'].diff()
-        gain = delta.clip(lower=0)
-        loss = -delta.clip(upper=0)
-        avg_gain = gain.rolling(window=14).mean()
-        avg_loss = loss.rolling(window=14).mean()
-        rs = avg_gain / avg_loss
-        df['RSI_14'] = 100 - (100 / (1 + rs))
-
-        # Target: next day's return
-        df['target'] = df['close'].pct_change().shift(-1)
-        last_row = df.iloc[[-1]].copy()
-
-        # Drop all rows with any NaN values except the last row (for prediction)
-        df.dropna(inplace=True)
-        df.reset_index(drop = True, inplace=True)
-
-        # Add one last row with latest available features (but NaN target)
-        df.loc[len(df)] = last_row.iloc[0]
-    
-        return df
-
 
 def get_data(tickers, days):
     # Authenticate
     client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
 
-    # Set up timeframe
-    request_days = days*2
-    training_days = days + 15
-    end_date = datetime.now() - timedelta(days=1)  # Make end date yesterday to predict today
-    start_date = end_date - timedelta(days=request_days)  # Request 500 days to ensure 250 days of trading day data
+    request_days = days * 2  # Request 2 times training days for non-trading days
+    training_days = days + 21
+    #end_date = datetime(2025, 7, 3)  # Bullish day
+    #end_date = datetime(2024, 8, 4) # Bearish day
+    #end_date = datetime.now() # Predict tomorrow's market
+    end_date = datetime.now() - timedelta(days=1)  # Predict yesterday for evaluation
+    start_date = end_date - timedelta(days=request_days)
 
-    # Set up Dataframe dictionary
+    if isinstance(tickers, str):
+        tickers = [tickers]
 
     stocks_data = {}
 
-    # Loop through the tickers and retrieve data separately
-
     for ticker in tickers:
-        symbol = [ticker]  # Stock ticker
         request_params = StockBarsRequest(
-            symbol_or_symbols=symbol,
-            timeframe=TimeFrame.Day,  # TimeFrame.Minute, .Hour, .Day, .Week, etc.
-            start=start_date,  # Start date
-            end=end_date  # End date
+            symbol_or_symbols=ticker,
+            timeframe=TimeFrame.Day,
+            start=start_date,
+            end=end_date
         )
 
-        # Fetch the data
-
         bars = client.get_stock_bars(request_params)
-
-        # Convert to DataFrame
-
         df = bars.df.reset_index()
+
+        if df.empty:
+            print(f"No data for {ticker}")
+            continue
+
+        if "timestamp" not in df.columns:
+            print(f"'timestamp' missing for {ticker}: {df.columns}")
+            continue
+
         df = df.sort_values("timestamp")
         df = (
             df.groupby("symbol", group_keys=False)
-            .tail(training_days)  # <-- Only save amount of training days as instances
+            .tail(training_days)
             .reset_index(drop=True)
         )
         stocks_data[ticker] = df
 
     return stocks_data
 
+def add_lagged_features_regression(df):
+    # All features should have shift(1), except for target
+    # Lagged close, open and volume
+    for col in ['close', 'open', 'volume']:
+        for lag in range(1, 4):
+            df[f'{col}_lag{lag}'] = df[col].shift(lag)
+
+    # Returns and gaps
+    df['return_1d'] = df['close'].pct_change(1).shift(1)
+    df['return_5d'] = df['close'].pct_change(5).shift(1)
+    df['gap'] = df['open'] - df['close'].shift(1)
+    df['gap_pct'] = df['gap'] / df['close'].shift(1)
+
+    # Rolling statistics
+    df['sma_5'] = df['close'].rolling(window=5).mean().shift(1)
+    df['sma_10'] = df['close'].rolling(window=10).mean().shift(1)
+    df['std_5'] = df['close'].rolling(window=5).std().shift(1)
+    df['std_10'] = df['close'].rolling(window=10).std().shift(1)
+    df['ema_26'] = df['close'].ewm(span=26, adjust=False).mean().shift(1)
+
+    # Price ratios
+    df['price_vs_sma5'] = df['close'].shift(1) / df['sma_5']
+    df['price_vs_sma10'] = df['close'].shift(1) / df['sma_10']
+    df['price_vs_vwap'] = df['close'].shift(1) / df['vwap'].shift(1)
+
+    # Volume features
+    df['volume_avg_10'] = df['volume'].rolling(window=10).mean().shift(1)
+    df['volume_spike'] = df['volume'].shift(1) / df['volume_avg_10']
+    df['volume_change_pct'] = df['volume'].pct_change(1).shift(1)
+
+    # Volatility and range
+    df['range'] = df['high'] - df['low']
+    df['range_lag1'] = df['range'].shift(1)
+
+    # MACD and signal
+    ema_12_raw = df['close'].ewm(span=12, adjust=False).mean()
+    ema_26_raw = df['close'].ewm(span=26, adjust=False).mean()
+    macd_raw = ema_12_raw - ema_26_raw
+    df['MACD'] = macd_raw.shift(1)
+    df['MACD_signal'] = macd_raw.shift(1).ewm(span=9, adjust=False).mean()
+
+    # RSI 14
+    delta = df['close'].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(window=14).mean()
+    avg_loss = loss.rolling(window=14).mean()
+    rs = avg_gain / avg_loss
+    df['RSI_14'] = (100 - (100 / (1 + rs))).shift(1)
+
+    # Longer return
+    df['return_10d'] = df['close'].pct_change(10).shift(1)
+
+    # Target: next day's return
+    df['target'] = df['close'].pct_change().shift(-1)
+
+    # Relative movement and return compared to the market (S&P500)
+    df['relative_return_1d'] = df['return_1d'] - df['target_sp500']
+    df['rolling_corr_10'] = df['return_1d'].rolling(10).corr(df['target_sp500']).shift(1)
+    df['return_vs_sp500'] = df['return_1d'] / (df['target_sp500'] + 1e-6)
+    cov = df['return_1d'].rolling(20).cov(df['target_sp500']).shift(1)
+    var = df['target_sp500'].rolling(20).var().shift(1)
+
+    sma_20 = df['close'].rolling(window=20).mean()
+    std_20 = df['close'].rolling(window=20).std()
+    upper_band = sma_20 + (2 * std_20)
+    lower_band = sma_20 - (2 * std_20)
+
+    # How far price is from the bands (normalized distance)
+    df['price_vs_upper_band'] = df['close'].shift(1) / upper_band.shift(1)
+    df['price_vs_lower_band'] = df['close'].shift(1) / lower_band.shift(1)
+
+    # Rolling Skewness of 1-day returns
+    df['return_skew_5d'] = df['return_1d'].rolling(window=5).skew().shift(1)
+
+    # Stochastic Oscillator
+    low_14 = df['low'].rolling(window=14).min()
+    high_14 = df['high'].rolling(window=14).max()
+    df['stoch_k'] = ((df['close'] - low_14) / (high_14 - low_14 + 1e-6)).shift(1)
+
+    # Price Acceleration (second derivative of close price)
+    df['price_accel'] = df['close'].shift(1) - 2 * df['close'].shift(2) + df['close'].shift(3)
+
+    # Rolling correlation with S&P 500
+    if 'target_sp500' in df.columns:
+        df['rolling_corr_10'] = df['return_1d'].rolling(10).corr(df['target_sp500']).shift(1)
+
+    df.drop(columns=[
+        'open',  # current-day open (used in gap)
+        'high',  # current-day high
+        'low',  # current-day low
+        'close',  # current-day close (used in target, return, etc.)
+        'volume',  # current-day volume
+        'trade_count',  # not used in any feature
+        'vwap',  # raw current-day vwap (you use vwap.shift(1) instead)
+        'range',  # current-day high-low range (already lagged as range_lag1)
+        'target_sp500'
+    ], errors='ignore', inplace=True)
+
+    # Drop all rows with any NaN values except the last row (for prediction)
+    last_row = df.iloc[[-1]].copy()
+    df.dropna(inplace=True)
+    df.reset_index(drop=True, inplace=True)
+
+    # Add one last row with latest available features (but NaN target)
+    df.loc[len(df)] = last_row.iloc[0]
+
+    return df
+
+def add_lagged_features_classification(df):
+    # All features should have shift(1), except for target
+    # Lagged close, open and volume
+    for col in ['close', 'open', 'volume']:
+        for lag in range(1, 4):
+            df[f'{col}_lag{lag}'] = df[col].shift(lag)
+
+    # Returns and gaps
+    df['return_1d'] = df['close'].pct_change(1).shift(1)
+    df['return_5d'] = df['close'].pct_change(5).shift(1)
+    df['gap'] = df['open'] - df['close'].shift(1)
+    df['gap_pct'] = df['gap'] / df['close'].shift(1)
+
+    # Rolling statistics
+    df['sma_5'] = df['close'].rolling(window=5).mean().shift(1)
+    df['sma_10'] = df['close'].rolling(window=10).mean().shift(1)
+    df['std_5'] = df['close'].rolling(window=5).std().shift(1)
+    df['std_10'] = df['close'].rolling(window=10).std().shift(1)
+    df['ema_26'] = df['close'].ewm(span=26, adjust=False).mean().shift(1)
+
+    # Price ratios
+    df['price_vs_sma5'] = df['close'].shift(1) / df['sma_5']
+    df['price_vs_sma10'] = df['close'].shift(1) / df['sma_10']
+    df['price_vs_vwap'] = df['close'].shift(1) / df['vwap'].shift(1)
+
+    # Volume features
+    df['volume_avg_10'] = df['volume'].rolling(window=10).mean().shift(1)
+    df['volume_spike'] = df['volume'].shift(1) / df['volume_avg_10']
+    df['volume_change_pct'] = df['volume'].pct_change(1).shift(1)
+
+    # Volatility and range
+    df['range'] = df['high'] - df['low']
+    df['range_lag1'] = df['range'].shift(1)
+
+    # MACD and signal
+    ema_12_raw = df['close'].ewm(span=12, adjust=False).mean()
+    ema_26_raw = df['close'].ewm(span=26, adjust=False).mean()
+    macd_raw = ema_12_raw - ema_26_raw
+    df['MACD'] = macd_raw.shift(1)
+    df['MACD_signal'] = macd_raw.shift(1).ewm(span=9, adjust=False).mean()
+
+    # RSI 14
+    delta = df['close'].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(window=14).mean()
+    avg_loss = loss.rolling(window=14).mean()
+    rs = avg_gain / avg_loss
+    df['RSI_14'] = (100 - (100 / (1 + rs))).shift(1)
+
+    # Longer return
+    df['return_10d'] = df['close'].pct_change(10).shift(1)
+
+    # Target: next day's return
+    df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
+
+    # Relative movement and return compared to the market (S&P500)
+    df['relative_return_1d'] = df['return_1d'] - df['target_sp500']
+    df['rolling_corr_10'] = df['return_1d'].rolling(10).corr(df['target_sp500']).shift(1)
+    df['return_vs_sp500'] = df['return_1d'] / (df['target_sp500'] + 1e-6)
+    cov = df['return_1d'].rolling(20).cov(df['target_sp500']).shift(1)
+    var = df['target_sp500'].rolling(20).var().shift(1)
+
+    sma_20 = df['close'].rolling(window=20).mean()
+    std_20 = df['close'].rolling(window=20).std()
+    upper_band = sma_20 + (2 * std_20)
+    lower_band = sma_20 - (2 * std_20)
+
+    # How far price is from the bands (normalized distance)
+    df['price_vs_upper_band'] = df['close'].shift(1) / upper_band.shift(1)
+    df['price_vs_lower_band'] = df['close'].shift(1) / lower_band.shift(1)
+
+    # Rolling Skewness of 1-day returns
+    df['return_skew_5d'] = df['return_1d'].rolling(window=5).skew().shift(1)
+
+    # Stochastic Oscillator
+    low_14 = df['low'].rolling(window=14).min()
+    high_14 = df['high'].rolling(window=14).max()
+    df['stoch_k'] = ((df['close'] - low_14) / (high_14 - low_14 + 1e-6)).shift(1)
+
+    # Price Acceleration (second derivative of close price)
+    df['price_accel'] = df['close'].shift(1) - 2 * df['close'].shift(2) + df['close'].shift(3)
+
+    # Rolling correlation with S&P 500
+    if 'target_sp500' in df.columns:
+        df['rolling_corr_10'] = df['return_1d'].rolling(10).corr(df['target_sp500']).shift(1)
+
+    df.drop(columns=[
+        'open',  # current-day open (used in gap)
+        'high',  # current-day high
+        'low',  # current-day low
+        'close',  # current-day close (used in target, return, etc.)
+        'volume',  # current-day volume
+        'trade_count',  # not used in any feature
+        'vwap',  # raw current-day vwap (you use vwap.shift(1) instead)
+        'range',  # current-day high-low range (already lagged as range_lag1)
+        'target_sp500'
+    ], errors='ignore', inplace=True)
+
+    # Drop all rows with any NaN values except the last row (for prediction)
+    df.dropna(inplace=True)
+    df.reset_index(drop=True, inplace=True)
+
+    # Make last row target N/A for prediction/evaluation
+    df.loc[df.index[-1], 'target'] = np.nan
+
+    return df
 
 def save_target(data):
     stocks_target = {}  # Set up data dictionary
@@ -190,11 +282,14 @@ def save_target(data):
 
     return stocks_target
 
+
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
-def predict_stocks_random_forest(data, days):
+
+
+def predict_stocks_random_forest(data, days, threshold):
     stock_predictions = {}  # Set up data dictionary
-    # Loop through and predict each stock
+    # Loop through data dictionary and predict each stock
     for key, df in data.items():
         # Exclude irrelevant features
         features = [col for col in data[key].columns if col not in ['symbol', 'timestamp', 'target']]
@@ -214,21 +309,29 @@ def predict_stocks_random_forest(data, days):
         model = RandomForestRegressor(n_estimators=100, random_state=42)
         model.fit(X_train_scaled, y_train)
 
-        stock_predictions[key] = model.predict(X_test)
+        predicted_return = model.predict(X_test)
+
+        if predicted_return >= threshold:
+            adjusted_return = abs(predicted_return)  # "up" → positive magnitude
+        else:
+            adjusted_return = predicted_return  # "down" → negative magnitude
+
+        stock_predictions[key] = adjusted_return
 
     return stock_predictions
 
+
 from sklearn.preprocessing import StandardScaler
-import xgboost as xgb # Import XGBoost
+import xgboost as xgb  # Import XGBoost
 import pandas as pd
 import numpy as np
+
 
 def predict_stocks_xgboost(data, days):
     stock_predictions = {}
 
     # Loop through and predict each stock
     for key, df in data.items():
-
         # Exclude irrelevant features
         features = [col for col in df.columns if col not in ['symbol', 'timestamp', 'target']]
 
@@ -245,12 +348,11 @@ def predict_stocks_xgboost(data, days):
         X_train_scaled = scaler.fit_transform(X_train)
         X_test_scaled = scaler.transform(X_test)
 
-
         model = xgb.XGBRegressor(
-            objective='reg:squarederror', # Standard objective for regression with squared loss
-            n_estimators=100,             # Number of boosting rounds (trees)
-            random_state=42,              # For reproducibility
-            n_jobs=-1                     # Use all available CPU cores
+            objective='reg:squarederror',  # Standard objective for regression with squared loss
+            n_estimators=100,  # Number of boosting rounds (trees)
+            random_state=42,  # For reproducibility
+            n_jobs=-1  # Use all available CPU cores
         )
 
         model.fit(X_train_scaled, y_train)
