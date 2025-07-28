@@ -1,0 +1,12 @@
+transformers
+xgboost
+feedparser
+requests
+PyTorch
+tensorflow
+tf-keras
+seaborn
+requests
+holidays
+alpaca-py
+scikit-learn
